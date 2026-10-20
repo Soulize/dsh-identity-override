@@ -1,0 +1,4 @@
+# Insert only this plugin. Do not replace the official system-prompt config row.
+- insert:
+    - id: identity-override
+      name: dsh-identity-override
