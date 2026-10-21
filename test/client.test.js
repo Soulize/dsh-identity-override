@@ -116,3 +116,109 @@ test('read-only settings never enable saving', () => {
   assert.equal(control(tree, 'textarea').props.disabled, true);
   assert.equal(control(tree, 'button', 'Save').props.disabled, true);
 });
+
+function keywordInput(tree, id) {
+  return findNode(tree, node => node.type === 'input' && node.props.id === id);
+}
+
+test('keyword editors appear side by side with empty disabled-rule defaults', () => {
+  const ui = createUI();
+  const tree = ui.render({ state: { status: 'ready', revision: 1, writable: true, value: {} } });
+  const grid = findNode(tree, node => node.props?.className === 'dio-keywords');
+  assert.ok(grid);
+  assert.equal(grid.children.length, 2);
+  assert.equal(keywordInput(tree, 'dio-keyword-find').props.value, '');
+  assert.equal(keywordInput(tree, 'dio-keyword-replace').props.value, '');
+  assert.equal(keywordInput(tree, 'dio-keyword-find').props.placeholder, 'DeepSeek harness');
+  assert.equal(keywordInput(tree, 'dio-keyword-replace').props.placeholder, 'harness');
+  assert.equal(control(tree, 'button', 'Save').props.disabled, true);
+});
+
+test('saving keyword fields leaves existing identity unchanged', async () => {
+  const ui = createUI();
+  const calls = [];
+  const form = {
+    state: { status: 'ready', revision: 7, writable: true, value: { identityText: 'Original identity' } },
+    async mutate(operations, revision) { calls.push({ operations, revision }); return true; },
+  };
+  keywordInput(ui.render(form), 'dio-keyword-find').props.onChange({ target: { value: 'DeepSeek harness' } });
+  keywordInput(ui.render(form), 'dio-keyword-replace').props.onChange({ target: { value: 'harness' } });
+  const tree = ui.render(form);
+  assert.equal(control(tree, 'button', 'Save').props.disabled, false);
+  await control(tree, 'button', 'Save').props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{
+    revision: 7,
+    operations: [
+      { op: 'set', path: ['keywordFind'], value: 'DeepSeek harness' },
+      { op: 'set', path: ['keywordReplace'], value: 'harness' },
+    ],
+  }]);
+});
+
+test('a blank replacement value can be saved to delete matched terms', async () => {
+  const ui = createUI();
+  const calls = [];
+  const form = {
+    state: { status: 'ready', revision: 7, writable: true, value: { keywordFind: 'foo', keywordReplace: 'bar' } },
+    async mutate(operations) { calls.push(operations); return true; },
+  };
+  keywordInput(ui.render(form), 'dio-keyword-replace').props.onChange({ target: { value: '' } });
+  await control(ui.render(form), 'button', 'Save').props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[
+    { op: 'set', path: ['keywordReplace'], value: '' },
+  ]]);
+});
+
+test('clear keyword rule resets both editors and only persists on Save', async () => {
+  const ui = createUI();
+  const calls = [];
+  const form = {
+    state: { status: 'ready', revision: 3, writable: true, value: { keywordFind: 'foo', keywordReplace: 'bar' } },
+    async mutate(operations) { calls.push(operations); return true; },
+  };
+  const tree = ui.render(form);
+  control(tree, 'button', 'Clear keyword rule').props.onClick();
+  const after = ui.render(form);
+  assert.equal(keywordInput(after, 'dio-keyword-find').props.value, '');
+  assert.equal(keywordInput(after, 'dio-keyword-replace').props.value, '');
+  assert.equal(calls.length, 0);
+  await control(after, 'button', 'Save').props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[
+    { op: 'set', path: ['keywordFind'], value: '' },
+    { op: 'set', path: ['keywordReplace'], value: '' },
+  ]]);
+});
+
+test('simultaneous identity and keyword changes save atomically in one mutate call', async () => {
+  const ui = createUI();
+  const calls = [];
+  const form = {
+    state: { status: 'ready', revision: 9, writable: true, value: {} },
+    async mutate(operations, revision) { calls.push({ operations, revision }); return true; },
+  };
+  control(ui.render(form), 'textarea').props.onChange({ target: { value: 'You are a new agent.' } });
+  keywordInput(ui.render(form), 'dio-keyword-find').props.onChange({ target: { value: 'DeepSeek' } });
+  keywordInput(ui.render(form), 'dio-keyword-replace').props.onChange({ target: { value: 'harness' } });
+  await control(ui.render(form), 'button', 'Save').props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{
+    revision: 9,
+    operations: [
+      { op: 'set', path: ['identityText'], value: 'You are a new agent.' },
+      { op: 'set', path: ['keywordFind'], value: 'DeepSeek' },
+      { op: 'set', path: ['keywordReplace'], value: 'harness' },
+    ],
+  }]);
+});
+
+test('keyword changes cannot bypass empty identity validation or read-only settings', () => {
+  const ui = createUI();
+  const form = { state: { status: 'ready', revision: 6, writable: true, value: {} } };
+  control(ui.render(form), 'textarea').props.onChange({ target: { value: '   ' } });
+  keywordInput(ui.render(form), 'dio-keyword-find').props.onChange({ target: { value: 'DeepSeek' } });
+  assert.equal(control(ui.render(form), 'button', 'Save').props.disabled, true);
+  const readonly = createUI();
+  const readForm = { state: { status: 'ready', revision: 6, writable: false, value: {} } };
+  assert.equal(keywordInput(readonly.render(readForm), 'dio-keyword-find').props.disabled, true);
+  assert.equal(keywordInput(readonly.render(readForm), 'dio-keyword-replace').props.disabled, true);
+  assert.equal(control(readonly.render(readForm), 'button', 'Save').props.disabled, true);
+});
